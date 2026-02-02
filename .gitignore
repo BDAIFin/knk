@@ -22,3 +22,4 @@ __pycache__/
 .DS_Store
 .vscode/
 original/train_fraud_labels.json
+split/
