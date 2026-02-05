@@ -19,11 +19,8 @@ MCCG_COLS = [
 def sort_like_stream(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    # tie-breaker: 원본 index로 고정(데이터가 shuffle돼도 안정)
-    # NOTE: df가 RangeIndex(0..n-1)면 사실상 동일하지만, 그래도 안전장치.
     out["_row_id"] = out.index.to_numpy()
 
-    # ✅ 안정 정렬 + (중요) 정렬 후 index 리셋해서 "눈으로 봐도" 정렬이 맞게 보이도록
     out = out.sort_values(
         ["tx_year", "tx_month", "tx_day", "tx_hour", "_row_id"],
         kind="mergesort",
