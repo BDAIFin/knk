@@ -41,13 +41,14 @@ except Exception:
     _LGBM_AVAILABLE = False
 
 
-
+# -----------------------------
 # Config
-
+# -----------------------------
 @dataclass
 class Stage1Config:
     label_col: str = "fraud"
-    drop_cols: Tuple[str, ...] = ("client_id", "card_id", "merchant_id")
+    # 너 DF에는 merchant_id가 없으니 기본 drop에서 제거
+    drop_cols: Tuple[str, ...] = ("client_id", "card_id")
     valid_ratio: float = 0.21
 
     target_recall: float = 0.70
@@ -67,7 +68,7 @@ class Stage1Config:
     hgb_max_iter: int = 200
     hgb_learning_rate: float = 0.06
 
-    # --- preprocessing 
+    # --- preprocessing
     use_scaler_for_xgb: bool = False
     use_scaler_for_lgbm: bool = False
 
@@ -80,7 +81,7 @@ class Stage1Config:
     xgb_reg_lambda: float = 1.0
     xgb_min_child_weight: float = 1.0
     xgb_gamma: float = 0.0
-    xgb_tree_method: str = "hist"
+    xgb_tree_method: str = "hist"   # "gpu_hist" 가능
     xgb_n_jobs: int = -1
     xgb_random_state: int = 42
 
@@ -96,33 +97,52 @@ class Stage1Config:
     lgbm_random_state: int = 42
 
 
+# -----------------------------
 # Split / Schema
-
+# -----------------------------
 def _make_time_index(df: pd.DataFrame) -> pd.Series:
-    # ✅ FIX: tx_day 누락으로 time_split이 실제 시간순이 아니게 섞이는 문제 방지
-    # year-month-day-hour 단위로 증가하도록 안전한 자리수로 구성
-    return (
-        df["tx_year"].astype(np.int64) * 1000000
-        + df["tx_month"].astype(np.int64) * 10000
-        + df["tx_day"].astype(np.int64) * 100
-        + df["tx_hour"].astype(np.int64)
-    )
+    """
+    tx_day가 없을 수 있는 너의 DF 스키마를 고려:
+    - tx_year, tx_month, tx_hour를 기반으로 정렬
+    - tx_day가 있으면 포함, 없으면 0으로 간주
+    """
+    y = df["tx_year"].astype(np.int64)
+    m = df["tx_month"].astype(np.int64)
+    h = df["tx_hour"].astype(np.int64)
+
+    if "tx_day" in df.columns:
+        d = df["tx_day"].astype(np.int64)
+    else:
+        d = 0
+
+    return y * 1000000 + m * 10000 + d * 100 + h
+
 
 def time_split(df: pd.DataFrame, cfg: Stage1Config) -> Tuple[pd.DataFrame, pd.DataFrame]:
     df2 = df.copy()
-    df2["_t"] = _make_time_index(df2)
-    df2 = df2.sort_values(["_t"]).reset_index(drop=True)
+
+    # 시간 컬럼이 있으면 time sort, 아니면 index split
+    has_time = all(c in df2.columns for c in ["tx_year", "tx_month", "tx_hour"])
+    if has_time:
+        df2["_t"] = _make_time_index(df2)
+        df2 = df2.sort_values(["_t"]).reset_index(drop=True)
+        df2 = df2.drop(columns=["_t"])
+    else:
+        df2 = df2.reset_index(drop=True)
 
     n = len(df2)
     cut = int(np.floor(n * (1.0 - cfg.valid_ratio)))
     cut = max(1, min(cut, n - 1))
 
-    train_df = df2.iloc[:cut].drop(columns=["_t"])
-    valid_df = df2.iloc[cut:].drop(columns=["_t"])
+    train_df = df2.iloc[:cut]
+    valid_df = df2.iloc[cut:]
     return train_df, valid_df
 
+
 def build_feature_columns(df: pd.DataFrame, cfg: Stage1Config) -> List[str]:
-    return [c for c in df.columns if c != cfg.label_col and c not in cfg.drop_cols]
+    drop_set = set([cfg.label_col]) | set(cfg.drop_cols)
+    return [c for c in df.columns if c not in drop_set]
+
 
 def make_xy(df: pd.DataFrame, feature_cols: List[str], label_col: str) -> Tuple[pd.DataFrame, np.ndarray]:
     X = df[feature_cols].copy()
@@ -130,9 +150,9 @@ def make_xy(df: pd.DataFrame, feature_cols: List[str], label_col: str) -> Tuple[
     return X, y
 
 
-
+# -----------------------------
 # Threshold selection
-
+# -----------------------------
 def choose_threshold_by_recall(
     y_true: np.ndarray,
     y_proba: np.ndarray,
@@ -168,7 +188,7 @@ def choose_threshold_by_recall(
             "threshold": float(thr_t[best]),
             "precision": float(prec_t[best]),
             "recall": float(rec_t[best]),
-            "note": "target_recall_not_met; picked max_recall_point"
+            "note": "target_recall_not_met; picked max_recall_point",
         }
 
     cand_idx = np.where(ok)[0]
@@ -179,16 +199,18 @@ def choose_threshold_by_recall(
         "threshold": float(thr_t[best]),
         "precision": float(prec_t[best]),
         "recall": float(rec_t[best]),
-        "note": "picked_best_precision_under_recall_constraint"
+        "note": "picked_best_precision_under_recall_constraint",
     }
 
 
+# -----------------------------
 # Model builders
-
+# -----------------------------
 def _scale_pos_weight(y: np.ndarray) -> float:
     pos = float((y == 1).sum())
     neg = float((y == 0).sum())
     return neg / max(pos, 1.0)
+
 
 def build_model_pipeline(
     feature_cols: List[str],
@@ -294,9 +316,9 @@ def build_model_pipeline(
     raise ValueError(f"Unknown model_name: {cfg.model_name}")
 
 
-
+# -----------------------------
 # Train
-
+# -----------------------------
 def train_stage1(df: pd.DataFrame, cfg: Stage1Config) -> Dict[str, Any]:
     pbar = tqdm(total=6, desc=f"Stage1({cfg.model_name})", leave=True)
 
@@ -337,7 +359,6 @@ def train_stage1(df: pd.DataFrame, cfg: Stage1Config) -> Dict[str, Any]:
     yhat_va = (proba_va >= thr).astype(np.int8)
 
     cm = confusion_matrix(y_va, yhat_va).tolist()
-    # 기존 포맷 유지: dict로 저장
     cls = classification_report(y_va, yhat_va, digits=4, output_dict=True)
 
     feature_schema = {
@@ -374,7 +395,9 @@ def train_stage1(df: pd.DataFrame, cfg: Stage1Config) -> Dict[str, Any]:
     }
 
 
+# -----------------------------
 # Save artifacts
+# -----------------------------
 def save_stage1_artifacts(
     model: Any,
     feature_schema: Dict[str, Any],
@@ -385,6 +408,7 @@ def save_stage1_artifacts(
     threshold_name: str = "threshold.json",
 ) -> None:
     import os
+
     os.makedirs(out_dir, exist_ok=True)
 
     dump(model, os.path.join(out_dir, model_name))
