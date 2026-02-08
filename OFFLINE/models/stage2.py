@@ -20,9 +20,9 @@ except Exception:
     _HDBSCAN_AVAILABLE = False
 
 
-# -----------------------------
+
 # Config
-# -----------------------------
+
 @dataclass
 class Stage2Config:
     label_col: str = "fraud"
@@ -66,9 +66,9 @@ class Stage2Config:
     topn: int = 10
 
 
-# -----------------------------
+
 # Feature matrix
-# -----------------------------
+
 def _infer_feature_cols(df: pd.DataFrame, cfg: Stage2Config) -> List[str]:
     if cfg.feature_cols is not None:
         cols = list(cfg.feature_cols)

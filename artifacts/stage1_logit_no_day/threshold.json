@@ -1,0 +1,6 @@
+{
+  "threshold": 0.5095765803571335,
+  "precision": 0.12325466452489806,
+  "recall": 0.7012302284710018,
+  "note": "picked_best_precision_under_recall_constraint"
+}
