@@ -162,7 +162,8 @@ This reflects real-world FDS development practices where stability and interpret
 ```
 project/
 │
-├── data/
+├── DATA/
+│   ├── online.parquet
 │   ├── train.parquet
 │   ├── test.parquet
 │   └── check.parquet
