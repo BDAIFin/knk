@@ -1,10 +1,15 @@
 # ===============================
 # Local data (do NOT commit)
 # ===============================
-data/
+DATA/
 *.csv
 *.parquet
+*.json
 
+DATA/original/
+*.csv
+*.parquet
+*.json
 # ===============================
 # Jupyter
 # ===============================
