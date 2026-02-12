@@ -121,7 +121,7 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
     df["male"] = (df["gender"] == "Male").astype("int8")
     df.drop(columns=["gender"], inplace=True)
 
-    df["birth_month"] = df["birth_month"].astype("int8")
+    df.drop(columns=["birth_month", "birth_year"], inplace=True)
     df.drop(columns=["card_number"], errors="ignore", inplace=True)
 
     df["card_brand"] = df["card_brand"].astype(str).str.strip().str.title()
