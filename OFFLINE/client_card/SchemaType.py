@@ -109,6 +109,8 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
     df["yearly_income"] = _clean_currency(df["yearly_income"])
     df["per_capita_income"] = _clean_currency(df["per_capita_income"])
 
+    df = df[df["credit_limit"] > 0].copy()
+
     if "has_chip" in df.columns:
         df["has_chip"] = df["has_chip"].replace({"YES": 1, "NO": 0}).astype("int8")
 
@@ -164,10 +166,6 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
         .rename(columns={"latitude": "home_lat", "longitude": "home_lon"})
     )
     df = df.join(home_loc, on="client_id")
-
-    df["distance_from_home"] = _haversine(
-        df["home_lat"], df["home_lon"], df["latitude"], df["longitude"]
-    )
 
     df["income_ratio_region"] = (df["yearly_income"] / (df["per_capita_income"] + 1e-6)).astype("float32")
     df["log_yearly_income"] = np.log1p(df["yearly_income"])

@@ -35,52 +35,6 @@ ERROR_PATTERNS: Dict[str, str] = {
 }
 
 
-MCC_GROUP: Dict[str, List[str]] = {
-    "Food & Daily": [
-        "5812", "5814", "5813", "5411", "5499", "5912", "5921",
-        "5300", "5310", "5311",
-    ],
-    "Transport & Travel": [
-        "4111", "4121", "4131", "4112",
-        "3722", "3771", "3775",
-        "4511", "4411",
-        "4722", "7011", "4784",
-        "4214",
-    ],
-    "Digital & Online": ["5815", "5816", "4814", "4899", "3780"],
-    "Financial": ["4829", "6300", "7276", "8931"],
-    "Retail": [
-        "5045", "5732", "5733",
-        "5941", "5942", "5947",
-        "5661", "5651", "5655", "5621",
-        "5977", "5970", "5932",
-        "5192", "5193",
-        "5712", "5719", "5722",
-        "5094",
-    ],
-    "Medical": ["8011", "8021", "8041", "8043", "8049", "8062", "8099"],
-    "Entertainment": ["7832", "7922", "7996", "7801", "7802", "7995"],
-    "Automotive & Home": [
-        "5541",
-        "7531", "7538", "7542", "7549", "5533",
-        "1711", "5251", "5261", "5211", "3504",
-        "7210", "7230", "7349",
-        "3640",
-    ],
-    "Utilities & Government": ["4900", "9402"],
-    "Professional Services": ["8111", "7393"],
-    "Industrial / Manufacturing": [
-        "3000", "3001", "3005", "3006", "3007", "3008", "3009",
-        "3058", "3066", "3075",
-        "3132", "3144", "3174",
-        "3256", "3260",
-        "3359", "3387", "3389", "3390", "3393", "3395", "3405",
-        "3509", "3596", "3684",
-        "3730",
-    ],
-}
-
-
 def load_fraud_labels_json_stream(labels_json_path: str | Path) -> pd.DataFrame:
     ids: List[int] = []
     labels: List[int] = []
@@ -139,9 +93,7 @@ def build_transaction_schema(
     trans["tx_month"] = trans["date"].dt.month.astype(cfg.month_day_hour_dtype)
     trans["tx_day"] = trans["date"].dt.day.astype(cfg.month_day_hour_dtype)
     trans["tx_hour"] = trans["date"].dt.hour.astype(cfg.month_day_hour_dtype)
-
-    trans["is_weekend"] = (trans["date"].dt.weekday >= 5).astype(cfg.binary_dtype)
-
+    trans["weekday"] = trans["date"].dt.weekday
     trans["is_refund"] = (trans["amount"] < 0).astype(cfg.binary_dtype)
     trans["log_abs_amount"] = np.log1p(np.abs(trans["amount"].astype("float64"))).astype(cfg.log_amount_dtype)
 
@@ -151,11 +103,6 @@ def build_transaction_schema(
     trans["mcc"] = pd.to_numeric(trans["mcc"], errors="coerce")
     trans["mcc"] = trans["mcc"].astype(cfg.mcc_nullable_int_dtype)
 
-    group_def = mcc_group if mcc_group is not None else MCC_GROUP
     trans["mcc"] = trans["mcc"].astype(str)
-
-    for group_name, mcc_list in group_def.items():
-        col_name = f"mccg_{_sanitize_group_col_name(group_name)}"
-        trans[col_name] = trans["mcc"].isin(list(map(str, mcc_list))).astype(cfg.binary_dtype)
 
     return trans
