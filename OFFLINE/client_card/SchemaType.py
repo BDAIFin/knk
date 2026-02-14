@@ -109,6 +109,8 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
     df["yearly_income"] = _clean_currency(df["yearly_income"])
     df["per_capita_income"] = _clean_currency(df["per_capita_income"])
 
+    df = df[df["credit_limit"] > 0].copy()
+
     if "has_chip" in df.columns:
         df["has_chip"] = df["has_chip"].replace({"YES": 1, "NO": 0}).astype("int8")
 
@@ -121,7 +123,7 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
     df["male"] = (df["gender"] == "Male").astype("int8")
     df.drop(columns=["gender"], inplace=True)
 
-    df["birth_month"] = df["birth_month"].astype("int8")
+    df.drop(columns=["birth_month", "birth_year"], inplace=True)
     df.drop(columns=["card_number"], errors="ignore", inplace=True)
 
     df["card_brand"] = df["card_brand"].astype(str).str.strip().str.title()
@@ -165,10 +167,6 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
     )
     df = df.join(home_loc, on="client_id")
 
-    df["distance_from_home"] = _haversine(
-        df["home_lat"], df["home_lon"], df["latitude"], df["longitude"]
-    )
-
     df["income_ratio_region"] = (df["yearly_income"] / (df["per_capita_income"] + 1e-6)).astype("float32")
     df["log_yearly_income"] = np.log1p(df["yearly_income"])
     df["log_income_ratio_region"] = np.log1p(df["income_ratio_region"])
@@ -178,5 +176,7 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
 
     df["amount_income_ratio"] = (df["amount"] / (df["yearly_income"] + 1e-6)).astype("float32")
     df["amount_limit_ratio"] = (df["amount"] / (df["credit_limit"] + 1e-6)).astype("float32")
+
+    df = df[df["months_from_account"] >= 0].copy()
 
     return df
