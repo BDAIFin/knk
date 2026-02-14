@@ -177,4 +177,6 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
     df["amount_income_ratio"] = (df["amount"] / (df["yearly_income"] + 1e-6)).astype("float32")
     df["amount_limit_ratio"] = (df["amount"] / (df["credit_limit"] + 1e-6)).astype("float32")
 
+    df = df[df["months_from_account"] >= 0].copy()
+
     return df
