@@ -174,8 +174,18 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
     df.drop(columns=["latitude", "longitude", "address"], errors="ignore", inplace=True)
     df.drop(columns=["home_lat", "home_lon"], inplace=True)
 
-    df["amount_income_ratio"] = (df["amount"] / (df["yearly_income"] + 1e-6)).astype("float32")
-    df["amount_limit_ratio"] = (df["amount"] / (df["credit_limit"] + 1e-6)).astype("float32")
+    df["abs_amount"] = df["amount"].abs().astype("float32")
+
+    df["amount_income_ratio"] = (
+        df["abs_amount"] / (df["yearly_income"] + 1e-6)
+    ).astype("float32")
+
+    df["amount_limit_ratio"] = (
+        df["abs_amount"] / (df["credit_limit"] + 1e-6)
+    ).astype("float32")
+
+    df["log_amount_income_ratio"] = np.log1p(df["amount_income_ratio"])
+    df["log_amount_limit_ratio"] = np.log1p(df["amount_limit_ratio"])
 
     df = df[df["months_from_account"] >= 0].copy()
 
