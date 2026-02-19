@@ -4,12 +4,52 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 LABEL = "fraud"
 AMT_COL = "log_abs_amount"
 
 
+
+# Stage2 CORE KEEP FEATURES 
+
+STAGE2_KEEP_COLS = [
+    # Fraud history
+    "card_fraud_last3",
+    "client_fraud_last3",
+
+    # Amount anomaly
+    "amount_deviation",
+
+    # Merchant novelty + interaction
+    "client_merchant_is_new",
+    "card_merchant_is_new",
+    "mccnew_x_velocity",
+    "dev_x_mccnew",
+
+    # Behavior pattern
+    "client_mcc_repeat_cnt_last5",
+    "card_mcc_change_cnt_last5",
+    "merchant_change_cnt_last5",
+
+    # Velocity context
+    "client_tx_1h_avg_prev",
+    "card_velocity_spike_ratio",
+
+    # Time context
+    "tx_hour",
+    "hour_sin",
+    "hour_cos",
+
+    # Demographic context
+    "current_age",
+    "log_yearly_income",
+]
+
+
+# -----------------------------
+# Utils
+# -----------------------------
 def ensure_sorted(df: pd.DataFrame, keys) -> pd.DataFrame:
+    # mergesort: stable sort (중요)
     return df.sort_values(keys, kind="mergesort").reset_index(drop=True)
 
 
@@ -24,6 +64,9 @@ def load_json(path: str) -> dict:
         return json.load(f)
 
 
+# -----------------------------
+# Artifacts
+# -----------------------------
 def fit_artifacts(
     df_train: pd.DataFrame,
     amt_q: float = 0.9,
@@ -31,6 +74,8 @@ def fit_artifacts(
     mcc_rate_mult: float = 3.0,
     high_risk_days=(0, 4, 6),
 ) -> dict:
+    # CORE_STAGE2에서는 실제로 사용하지 않아도,
+    # artifacts 저장/재현성 유지 위해 남겨둠.
     thr_amt = float(df_train[AMT_COL].quantile(amt_q))
     base_rate = float(df_train[LABEL].mean())
 
@@ -55,6 +100,9 @@ def fit_artifacts(
         "high_risk_days": list(high_risk_days),
     }
 
+
+
+# Fast 1h-window counts
 
 def feature_client_tx_1h(df: pd.DataFrame) -> pd.Series:
     df = ensure_sorted(df, ["client_id", "date"])
@@ -102,115 +150,39 @@ def feature_card_tx_1h(df: pd.DataFrame) -> pd.Series:
     return pd.Series(out, index=df.index, name="card_tx_1h")
 
 
-def build_features(df: pd.DataFrame, artifacts: dict) -> pd.DataFrame:
+# Feature builder (CORE only)
+
+def build_features(df: pd.DataFrame, artifacts: dict | None = None) -> pd.DataFrame:
     df = df.copy()
 
-    df = ensure_sorted(df, ["client_id", "date"])
+    # row 정합성 보장용 id (정렬을 여러 번 해도 최종에 복원)
+    df["_row_id"] = np.arange(len(df), dtype=np.int32)
 
-    thr = artifacts["thr_amt"]
-    df["refund_high_amount"] = (
-        (df["is_refund"].astype("int8") == 1) & (df[AMT_COL] > thr)
-    ).astype("int8")
 
-    if "amount" in df.columns:
-        df.drop(columns=["amount"], inplace=True)
+    need_cols = ["id", "client_id", "card_id", "merchant_id", "mcc", "date", "tx_hour", AMT_COL, "current_age", "log_yearly_income"]
+    missing = [c for c in need_cols if c not in df.columns]
+    if missing:
+        raise KeyError(f"Missing required raw cols: {missing}")
 
-    df = ensure_sorted(df, ["card_id", "date"])
-    g_err = df.groupby("card_id", sort=False)["has_error"]
+    if not np.issubdtype(df["date"].dtype, np.datetime64):
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        if df["date"].isna().any():
+            raise ValueError("date column has NaT after to_datetime; check raw data.")
 
-    e1 = g_err.shift(1).fillna(0).astype("int8")
-    e2 = g_err.shift(2).fillna(0).astype("int8")
-    e3 = g_err.shift(3).fillna(0).astype("int8")
-    df["card_error_last1"] = e1
-    df["card_error_last3"] = (e1 + e2 + e3).astype("int8")
 
-    df["card_fraud_cum_prev"] = (
-        df.groupby("card_id", sort=False)[LABEL]
-        .cumsum()
-        .shift(1)
-        .fillna(0)
-        .astype("int32")
-    )
-    df["card_has_fraud_history"] = (df["card_fraud_cum_prev"] > 0).astype("int8")
-    df["card_hist_x_error"] = (df["card_has_fraud_history"] * df["card_error_last1"]).astype(
-        "int8"
-    )
-    df.drop(columns=["card_fraud_cum_prev", "card_has_fraud_history"], inplace=True)
+    df["current_age"] = pd.to_numeric(df["current_age"], downcast="integer")
+    df["log_yearly_income"] = pd.to_numeric(df["log_yearly_income"], downcast="float")
 
-    drop_err = [
-        "err_insufficient_balance",
-        "err_technical_glitch",
-        "err_bad_zipcode",
-        "err_bad_pin",
-    ]
-    df.drop(columns=[c for c in drop_err if c in df.columns], inplace=True)
 
-    df = ensure_sorted(df, ["client_id", "date"])
+    df = ensure_sorted(df, ["client_id", "date", "_row_id"])
     df["hour_sin"] = np.sin(2 * np.pi * df["tx_hour"] / 24).astype("float32")
     df["hour_cos"] = np.cos(2 * np.pi * df["tx_hour"] / 24).astype("float32")
 
-    df["sin_shift"] = (
-        df.groupby("client_id", sort=False)["hour_sin"]
-        .shift(1)
-        .fillna(df["hour_sin"])
-        .astype("float32")
-    )
-    df["cos_shift"] = (
-        df.groupby("client_id", sort=False)["hour_cos"]
-        .shift(1)
-        .fillna(df["hour_cos"])
-        .astype("float32")
-    )
 
-    df["sin_cumsum"] = df.groupby("client_id", sort=False)["sin_shift"].cumsum()
-    df["cos_cumsum"] = df.groupby("client_id", sort=False)["cos_shift"].cumsum()
-    df["cnt_past"] = df.groupby("client_id", sort=False).cumcount()
+    # 2) MCC repeat cnt (client) + is_new (internal)
 
-    df["client_sin_mean_past"] = np.where(
-        df["cnt_past"] > 0, df["sin_cumsum"] / df["cnt_past"], df["hour_sin"]
-    ).astype("float32")
-    df["client_cos_mean_past"] = np.where(
-        df["cnt_past"] > 0, df["cos_cumsum"] / df["cnt_past"], df["hour_cos"]
-    ).astype("float32")
-
-    df["hour_circular_distance"] = np.sqrt(
-        (df["hour_sin"] - df["client_sin_mean_past"]) ** 2
-        + (df["hour_cos"] - df["client_cos_mean_past"]) ** 2
-    ).astype("float32")
-
-    df["client_weekday_prev"] = (
-        df.groupby("client_id", sort=False)["weekday"]
-        .shift(1)
-        .fillna(df["weekday"])
-        .astype(df["weekday"].dtype)
-    )
-    df["client_weekday_match_last1"] = (df["weekday"] == df["client_weekday_prev"]).astype(
-        "int8"
-    )
-
-    if "cb_Discover" in df.columns and "err_bad_cvv" in df.columns:
-        df["discover_x_cvv"] = (
-            df["cb_Discover"].astype("int8") * df["err_bad_cvv"].astype("int8")
-        ).astype("int8")
-
-    if "is_credit" in df.columns and "is_prepaid" in df.columns:
-        card_type = np.select(
-            [df["is_credit"] == 1, df["is_prepaid"] == 1],
-            ["credit", "debit(prepaid)"],
-            default="debit(non_prepaid)",
-        )
-        df["prepaid_logamount_interaction"] = (
-            (card_type == "debit(prepaid)").astype("int8") * df[AMT_COL]
-        ).astype("float32")
-
-    highrisk_mcc = set(artifacts["highrisk_mcc"])
-    df["mcc_highrisk_90"] = df["mcc"].isin(highrisk_mcc).astype("int8")
-
-    high_risk_days = set(artifacts["high_risk_days"])
-    df["is_highrisk_weekday"] = df["weekday"].isin(high_risk_days).astype("int8")
-
-    df = ensure_sorted(df, ["client_id", "date"])
-    df["client_mcc_prior_count"] = df.groupby(["client_id", "mcc"], sort=False).cumcount()
+    df = ensure_sorted(df, ["client_id", "date", "_row_id"])
+    df["client_mcc_prior_count"] = df.groupby(["client_id", "mcc"], sort=False).cumcount().astype("int32")
     df["client_mcc_is_new"] = (df["client_mcc_prior_count"] == 0).astype("int8")
 
     g_mcc = df.groupby("client_id", sort=False)["mcc"]
@@ -220,20 +192,6 @@ def build_features(df: pd.DataFrame, artifacts: dict) -> pd.DataFrame:
     m4 = df["mcc"].eq(g_mcc.shift(4))
     m5 = df["mcc"].eq(g_mcc.shift(5))
 
-    prev1 = g_mcc.shift(1)
-    prev2 = g_mcc.shift(2)
-    prev3 = g_mcc.shift(3)
-    prev4 = g_mcc.shift(4)
-    prev5 = g_mcc.shift(5)
-
-    df["client_mcc_change_cnt_last5"] = (
-        prev1.ne(prev2).fillna(False).astype("int8")
-        + prev2.ne(prev3).fillna(False).astype("int8")
-        + prev3.ne(prev4).fillna(False).astype("int8")
-        + prev4.ne(prev5).fillna(False).astype("int8")
-    ).astype("int8")
-
-    df["client_mcc_seen_last5"] = (m1 | m2 | m3 | m4 | m5).fillna(False).astype("int8")
     df["client_mcc_repeat_cnt_last5"] = (
         m1.fillna(False).astype("int8")
         + m2.fillna(False).astype("int8")
@@ -241,161 +199,148 @@ def build_features(df: pd.DataFrame, artifacts: dict) -> pd.DataFrame:
         + m4.fillna(False).astype("int8")
         + m5.fillna(False).astype("int8")
     ).astype("int8")
-    df["client_mcc_repeat_ratio_last5"] = (df["client_mcc_repeat_cnt_last5"] / 5.0).astype(
-        "float32"
-    )
 
-    df = ensure_sorted(df, ["card_id", "date"])
-    df["card_mcc_prior_count"] = df.groupby(["card_id", "mcc"], sort=False).cumcount()
-    df["card_mcc_is_new"] = (df["card_mcc_prior_count"] == 0).astype("int8")
+    # 3) card MCC change cnt (KEEP)
 
+    df = ensure_sorted(df, ["card_id", "date", "_row_id"])
     g_card_mcc = df.groupby("card_id", sort=False)["mcc"]
-    prev1 = g_card_mcc.shift(1)
-    prev2 = g_card_mcc.shift(2)
-    prev3 = g_card_mcc.shift(3)
-    prev4 = g_card_mcc.shift(4)
-    prev5 = g_card_mcc.shift(5)
+    prev1c = g_card_mcc.shift(1)
+    prev2c = g_card_mcc.shift(2)
+    prev3c = g_card_mcc.shift(3)
+    prev4c = g_card_mcc.shift(4)
+    prev5c = g_card_mcc.shift(5)
 
     df["card_mcc_change_cnt_last5"] = (
-        prev1.ne(prev2).fillna(False).astype("int8")
-        + prev2.ne(prev3).fillna(False).astype("int8")
-        + prev3.ne(prev4).fillna(False).astype("int8")
-        + prev4.ne(prev5).fillna(False).astype("int8")
+        prev1c.ne(prev2c).fillna(False).astype("int8")
+        + prev2c.ne(prev3c).fillna(False).astype("int8")
+        + prev3c.ne(prev4c).fillna(False).astype("int8")
+        + prev4c.ne(prev5c).fillna(False).astype("int8")
     ).astype("int8")
 
-    df = ensure_sorted(df, ["client_id", "date"])
+
+    # 4) Merchant novelty + change cnt (KEEP)
+
+    # novelty
+    df = ensure_sorted(df, ["client_id", "date", "_row_id"])
     df["client_merchant_is_new"] = (
-        df.groupby(["client_id", "merchant_id"], sort=False)
-        .cumcount()
-        .eq(0)
-        .astype("int8")
-    )
-    df["card_merchant_is_new"] = (
-        df.groupby(["card_id", "merchant_id"], sort=False)
-        .cumcount()
-        .eq(0)
-        .astype("int8")
+        df.groupby(["client_id", "merchant_id"], sort=False).cumcount().eq(0).astype("int8")
     )
 
+    df = ensure_sorted(df, ["card_id", "date", "_row_id"])
+    df["card_merchant_is_new"] = (
+        df.groupby(["card_id", "merchant_id"], sort=False).cumcount().eq(0).astype("int8")
+    )
+
+    # change cnt on card (rolling)
     prev_merchant = df.groupby("card_id", sort=False)["merchant_id"].shift(1)
-    df["merchant_changed"] = df["merchant_id"].ne(prev_merchant).fillna(True).astype("int8")
+    df["_merchant_changed"] = df["merchant_id"].ne(prev_merchant).fillna(True).astype("int8")
 
     df["merchant_change_cnt_last5"] = (
-        df.groupby("card_id", sort=False)["merchant_changed"]
+        df.groupby("card_id", sort=False)["_merchant_changed"]
         .rolling(window=5, min_periods=1)
         .sum()
         .reset_index(level=0, drop=True)
         .astype("int8")
     )
-    df.drop(columns=["merchant_changed"], inplace=True)
+    df.drop(columns=["_merchant_changed"], inplace=True)
 
-    df["merchant_is_new"] = df["card_merchant_is_new"].astype("int8")
-    df["merchant_is_new_x_mcc_is_new"] = (
-        df["merchant_is_new"].astype("int8") * df["card_mcc_is_new"].astype("int8")
-    ).astype("int8")
-    df["merchant_is_new_x_has_error"] = (
-        df["merchant_is_new"].astype("int8") * df["has_error"].astype("int8")
-    ).astype("int8")
+    # 5) Velocity (1h) (KEEP)
 
-    df["prev_tx_time"] = df.groupby("client_id", sort=False)["date"].shift(1)
-    df["seconds_since_prev_tx"] = (df["date"] - df["prev_tx_time"]).dt.total_seconds().fillna(0)
+    df_sorted_client = ensure_sorted(df[["_row_id", "client_id", "date"]], ["client_id", "date", "_row_id"])
+    client_tx_1h = feature_client_tx_1h(df_sorted_client.rename(columns={"_row_id": "_row_id"}))
+    df_sorted_client["client_tx_1h"] = client_tx_1h.to_numpy()
 
-    df["log_interval"] = np.log1p(df["seconds_since_prev_tx"]).astype("float32")
-    df["log_interval_shift"] = df.groupby("client_id", sort=False)["log_interval"].shift(1)
-
-    df["interval_cumsum"] = (
-        df["log_interval_shift"].fillna(0).groupby(df["client_id"]).cumsum()
+    df_sorted_client["client_tx_1h_shift"] = df_sorted_client.groupby("client_id", sort=False)["client_tx_1h"].shift(1)
+    df_sorted_client["client_tx_1h_cumsum"] = (
+        df_sorted_client["client_tx_1h_shift"].fillna(0).groupby(df_sorted_client["client_id"], sort=False).cumsum()
     ).astype("float32")
-    df["interval_cnt_past"] = df.groupby("client_id", sort=False).cumcount()
+    df_sorted_client["client_tx_cnt_past"] = df_sorted_client.groupby("client_id", sort=False).cumcount().astype("int32")
 
-    df["client_avg_interval_prev"] = np.where(
-        df["interval_cnt_past"] > 0,
-        df["interval_cumsum"] / df["interval_cnt_past"],
-        df["log_interval"],
+    df_sorted_client["client_tx_1h_avg_prev"] = np.where(
+        df_sorted_client["client_tx_cnt_past"] > 0,
+        df_sorted_client["client_tx_1h_cumsum"] / df_sorted_client["client_tx_cnt_past"],
+        df_sorted_client["client_tx_1h"],
     ).astype("float32")
 
-    df["client_tx_1h"] = feature_client_tx_1h(df)
-    df["client_tx_1h_shift"] = df.groupby("client_id", sort=False)["client_tx_1h"].shift(1)
-
-    df["client_tx_1h_cumsum"] = (
-        df["client_tx_1h_shift"].fillna(0).groupby(df["client_id"]).cumsum()
-    ).astype("float32")
-    df["client_tx_cnt_past"] = df.groupby("client_id", sort=False).cumcount()
-
-    df["client_tx_1h_avg_prev"] = np.where(
-        df["client_tx_cnt_past"] > 0,
-        df["client_tx_1h_cumsum"] / df["client_tx_cnt_past"],
-        df["client_tx_1h"],
-    ).astype("float32")
-
-    df["card_tx_1h"] = feature_card_tx_1h(df)
-    df["card_tx_1h_shift"] = df.groupby("card_id", sort=False)["card_tx_1h"].shift(1)
-
-    df["card_tx_1h_cumsum"] = (
-        df["card_tx_1h_shift"].fillna(0).groupby(df["card_id"]).cumsum()
-    ).astype("float32")
-    df["card_tx_cnt_past"] = df.groupby("card_id", sort=False).cumcount()
-
-    df["card_tx_1h_avg_prev"] = np.where(
-        df["card_tx_cnt_past"] > 0,
-        df["card_tx_1h_cumsum"] / df["card_tx_cnt_past"],
-        df["card_tx_1h"],
-    ).astype("float32")
-
-    df["card_velocity_spike_ratio"] = (
-        df["card_tx_1h"] / (df["card_tx_1h_avg_prev"] + 1e-6)
-    ).astype("float32")
-
-    df = ensure_sorted(df, ["client_id", "date"])
-    df["amt_shift"] = df.groupby("client_id", sort=False)[AMT_COL].shift(1)
-
-    df["amt_cumsum"] = df["amt_shift"].fillna(0).groupby(df["client_id"]).cumsum().astype(
-        "float32"
+    df = df.merge(
+        df_sorted_client[["_row_id", "client_tx_1h_avg_prev", "client_tx_1h"]],
+        on="_row_id",
+        how="left",
+        validate="one_to_one",
     )
-    df["amt_cnt_past"] = df.groupby("client_id", sort=False).cumcount()
 
-    df["client_avg_amt_prev"] = np.where(
-        df["amt_cnt_past"] > 0, df["amt_cumsum"] / df["amt_cnt_past"], df[AMT_COL]
+    df_sorted_card = ensure_sorted(df[["_row_id", "card_id", "date"]], ["card_id", "date", "_row_id"])
+    card_tx_1h = feature_card_tx_1h(df_sorted_card.rename(columns={"_row_id": "_row_id"}))
+    df_sorted_card["card_tx_1h"] = card_tx_1h.to_numpy()
+
+    df_sorted_card["card_tx_1h_shift"] = df_sorted_card.groupby("card_id", sort=False)["card_tx_1h"].shift(1)
+    df_sorted_card["card_tx_1h_cumsum"] = (
+        df_sorted_card["card_tx_1h_shift"].fillna(0).groupby(df_sorted_card["card_id"], sort=False).cumsum()
+    ).astype("float32")
+    df_sorted_card["card_tx_cnt_past"] = df_sorted_card.groupby("card_id", sort=False).cumcount().astype("int32")
+
+    df_sorted_card["card_tx_1h_avg_prev"] = np.where(
+        df_sorted_card["card_tx_cnt_past"] > 0,
+        df_sorted_card["card_tx_1h_cumsum"] / df_sorted_card["card_tx_cnt_past"],
+        df_sorted_card["card_tx_1h"],
     ).astype("float32")
 
-    df["amount_vs_client_avg_diff"] = (df[AMT_COL] - df["client_avg_amt_prev"]).astype(
-        "float32"
+    df = df.merge(
+        df_sorted_card[["_row_id", "card_tx_1h", "card_tx_1h_avg_prev"]],
+        on="_row_id",
+        how="left",
+        validate="one_to_one",
     )
+
+    df["card_velocity_spike_ratio"] = (df["card_tx_1h"] / (df["card_tx_1h_avg_prev"] + 1e-6)).astype("float32")
+
+    # -------------------------
+    # 6) Amount deviation (KEEP) + dev_x_mccnew (KEEP)
+    # -------------------------
+    # client avg amount prev (dev_x_mccnew용)
+    df = ensure_sorted(df, ["client_id", "date", "_row_id"])
+    df["_amt_shift"] = df.groupby("client_id", sort=False)[AMT_COL].shift(1)
+    df["_amt_cumsum"] = df["_amt_shift"].fillna(0).groupby(df["client_id"], sort=False).cumsum().astype("float32")
+    df["_amt_cnt_past"] = df.groupby("client_id", sort=False).cumcount().astype("int32")
+    df["_client_avg_amt_prev"] = np.where(
+        df["_amt_cnt_past"] > 0, df["_amt_cumsum"] / df["_amt_cnt_past"], df[AMT_COL]
+    ).astype("float32")
+
+    # amount_deviation
+    client_amt_mean = df.groupby("client_id", sort=False)[AMT_COL].transform("mean")
+    client_amt_std = df.groupby("client_id", sort=False)[AMT_COL].transform("std")
+    df["amount_deviation"] = ((df[AMT_COL] - client_amt_mean) / (client_amt_std + 1e-6)).astype("float32")
+
+    # -------------------------
+    # 7) Fraud history last3 (KEEP)
+    # -------------------------
+    if LABEL not in df.columns:
+        raise KeyError(
+            "LABEL column (fraud) not found. "
+            "This builder is TRAIN-time feature builder. "
+            "For SERVING, fraud-history features must come from confirmed fraud event logs."
+        )
 
     f1 = df.groupby("card_id", sort=False)[LABEL].shift(1)
     f2 = df.groupby("card_id", sort=False)[LABEL].shift(2)
     f3 = df.groupby("card_id", sort=False)[LABEL].shift(3)
-    df["card_fraud_last3"] = (
-        f1.fillna(0).astype("int8") + f2.fillna(0).astype("int8") + f3.fillna(0).astype("int8")
-    ).astype("int8")
+    df["card_fraud_last3"] = (f1.fillna(0).astype("int8") + f2.fillna(0).astype("int8") + f3.fillna(0).astype("int8")).astype("int8")
 
     f1 = df.groupby("client_id", sort=False)[LABEL].shift(1)
     f2 = df.groupby("client_id", sort=False)[LABEL].shift(2)
     f3 = df.groupby("client_id", sort=False)[LABEL].shift(3)
-    df["client_fraud_last3"] = (
-        f1.fillna(0).astype("int8") + f2.fillna(0).astype("int8") + f3.fillna(0).astype("int8")
-    ).astype("int8")
+    df["client_fraud_last3"] = (f1.fillna(0).astype("int8") + f2.fillna(0).astype("int8") + f3.fillna(0).astype("int8")).astype("int8")
 
-    client_amt_mean = df.groupby("client_id", sort=False)[AMT_COL].transform("mean")
-    client_amt_std = df.groupby("client_id", sort=False)[AMT_COL].transform("std")
+    # -------------------------
+    # 8) Interactions (KEEP)
+    # -------------------------
+    df["_velocity_spike_ratio"] = (df["client_tx_1h"] / (df["client_tx_1h_avg_prev"] + 1e-6)).astype("float32")
+    df["mccnew_x_velocity"] = (df["client_mcc_is_new"].astype("float32") * df["_velocity_spike_ratio"]).astype("float32")
 
-    df["amount_deviation"] = (
-        (df[AMT_COL] - client_amt_mean) / (client_amt_std + 1e-6)
-    ).astype("float32")
-
-    df["velocity_spike_ratio"] = (
-        df["client_tx_1h"] / (df["client_tx_1h_avg_prev"] + 1e-6)
-    ).astype("float32")
-
-    df["mccnew_x_error"] = (df["client_mcc_is_new"] * df["has_error"]).astype("int8")
-    df["mccnew_x_velocity"] = (df["client_mcc_is_new"] * df["velocity_spike_ratio"]).astype(
-        "float32"
-    )
-
+    # dev_x_mccnew
     eps = 1e-6
     K = 10
-
-    df["client_recent_avg_amt"] = (
+    df["_client_recent_avg_amt"] = (
         df.groupby("client_id", sort=False)[AMT_COL]
         .shift(1)
         .rolling(K, min_periods=1)
@@ -403,95 +348,69 @@ def build_features(df: pd.DataFrame, artifacts: dict) -> pd.DataFrame:
         .reset_index(level=0, drop=True)
         .astype("float32")
     )
-    df["client_recent_avg_amt"] = df["client_recent_avg_amt"].fillna(df["client_avg_amt_prev"]).astype(
-        "float32"
-    )
+    df["_client_recent_avg_amt"] = df["_client_recent_avg_amt"].fillna(df["_client_avg_amt_prev"]).astype("float32")
+    df["_amount_vs_recent_window_avg"] = (df[AMT_COL] / (df["_client_recent_avg_amt"] + eps)).astype("float32")
+    df["_log_amount_vs_recent_window_avg"] = np.log1p(df["_amount_vs_recent_window_avg"]).astype("float32")
 
-    df["amount_vs_recent_window_avg"] = (df[AMT_COL] / (df["client_recent_avg_amt"] + eps)).astype(
-        "float32"
-    )
-    df["log_amount_vs_recent_window_avg"] = np.log1p(df["amount_vs_recent_window_avg"]).astype(
-        "float32"
-    )
-
-    DEV = "log_amount_vs_recent_window_avg"
-    df["dev_x_mccnew"] = (df[DEV] * df["client_mcc_is_new"]).astype("float32")
-    df["dev_x_velocity"] = (df[DEV] * df["card_velocity_spike_ratio"]).astype("float32")
-
-    return df
+    df["dev_x_mccnew"] = (df["_log_amount_vs_recent_window_avg"] * df["client_mcc_is_new"]).astype("float32")
 
 
+    # 9) row 순서 복원 + 컬럼 슬림
+
+    df = df.sort_values("_row_id", kind="mergesort").reset_index(drop=True)
+
+    # 중간 컬럼 제거 (필요한 것만 남김)
+    keep = set(["id"] + STAGE2_KEEP_COLS + [LABEL, "_row_id"])
+    df_out = df[[c for c in df.columns if c in keep]].copy()
+
+    # _row_id는 최종엔 필요 없으면 제거
+    df_out.drop(columns=["_row_id"], inplace=True)
+
+    # dtype 정리
+    df_out[LABEL] = df_out[LABEL].astype("int8")
+    for c in df_out.columns:
+        if c != LABEL and pd.api.types.is_float_dtype(df_out[c]):
+            df_out[c] = pd.to_numeric(df_out[c], downcast="float")
+        if c in ("current_age",) and pd.api.types.is_integer_dtype(df_out[c]):
+            df_out[c] = pd.to_numeric(df_out[c], downcast="integer")
+
+    return df_out
+
+
+# -----------------------------
+# Make model df: KEEP-only 방식
+# -----------------------------
 def make_df_model(df_feat: pd.DataFrame) -> pd.DataFrame:
-    df = df_feat.copy()
+    missing = [c for c in STAGE2_KEEP_COLS if c not in df_feat.columns]
+    if missing:
+        raise KeyError(f"Missing required Stage2 cols: {missing}")
 
-    if "date" in df.columns:
-        df.drop(columns=["date"], inplace=True)
+    df_model = df_feat[["id"] + STAGE2_KEEP_COLS + [LABEL]].copy()
+    df_model[LABEL] = df_model[LABEL].astype("int8")
 
-    drop_cols = ["client_id", "card_id", "merchant_id", "mcc"]
-    df_model = df.drop(columns=[c for c in drop_cols if c in df.columns])
-
-    drop_more = [
-        "amount_income_ratio",
-        "amount_limit_ratio",
-        "abs_amount",
-        "expires_year",
-        "years_since_pin_change",
-        "tx_day",
-        "weekday",
-        "tx_year",
-        "client_sin_mean_past",
-        "sin_cumsum",
-        "client_cos_mean_past",
-        "client_weekday_prev",
-        "cos_cumsum",
-        "cnt_past",
-        "credit_limit",
-        "total_debt",
-        "yearly_income",
-        "per_capita_income",
-        "income_ratio_region",
-        "months_to_expire",
-        "months_from_account",
-        "male",
-        "expires_month",
-        "num_cards_issued",
-        "credit_score",
-        "cb_Visa",
-        "cb_Mastercard",
-        "is_credit",
-        "client_mcc_prior_count",
-        "card_mcc_prior_count",
-        "prev_tx_time",
-        "log_interval",
-        "log_interval_shift",
-        "interval_cumsum",
-        "interval_cnt_past",
-        "client_tx_1h",
-        "client_tx_1h_shift",
-        "client_tx_1h_cumsum",
-        "client_tx_cnt_past",
-        "card_tx_1h",
-        "card_tx_1h_shift",
-        "card_tx_1h_cumsum",
-        "card_tx_cnt_past",
-        "card_tx_1h_avg_prev",
-        "amt_shift",
-        "amt_cumsum",
-        "amt_cnt_past",
-        "client_avg_amt_prev",
-        "log_amount_vs_recent_window_avg",
-        "amount_vs_recent_window_avg",
-        "client_recent_avg_amt",
-        "velocity_spike_ratio",
-    ]
-    df_model = df_model.drop(columns=[c for c in drop_more if c in df_model.columns])
+    for c in df_model.columns:
+        if c != LABEL and pd.api.types.is_float_dtype(df_model[c]):
+            df_model[c] = pd.to_numeric(df_model[c], downcast="float")
+        if c == "current_age":
+            df_model[c] = pd.to_numeric(df_model[c], downcast="integer")
 
     return df_model
 
 
+def sanity_report(df_model: pd.DataFrame) -> None:
+    cols = [c for c in df_model.columns if c != LABEL]
+    extra = [c for c in cols if c not in STAGE2_KEEP_COLS]
+    missing = [c for c in STAGE2_KEEP_COLS if c not in cols]
+    print("=== Sanity Check ===")
+    print("n_cols(except label):", len(cols))
+    print("missing:", missing)
+    print("extra:", extra)
+    print("col_order_ok:", cols == STAGE2_KEEP_COLS)
+
+
 def main():
-    in_path = "DATA/dataset/train_stage2"
-    out_parquet = "DATA/dataset/test_add"
+    in_path = "DATA/dataset/train_stage2"          # input parquet
+    out_parquet = "DATA/dataset/stage2_model_df"   # output parquet (KEEP-only)
     artifacts_path = "DATA/artifacts/stage2_artifacts.json"
 
     df = pd.read_parquet(in_path)
@@ -499,12 +418,15 @@ def main():
     artifacts = fit_artifacts(df)
     save_json(artifacts, artifacts_path)
 
+    # CORE features only (already slim)
     df_feat = build_features(df, artifacts)
     df_model = make_df_model(df_feat)
 
     Path(out_parquet).parent.mkdir(parents=True, exist_ok=True)
     df_model.to_parquet(out_parquet)
+
     print("saved:", out_parquet, "| shape:", df_model.shape)
+    sanity_report(df_model)
 
 
 if __name__ == "__main__":

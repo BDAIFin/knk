@@ -80,8 +80,13 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
 
     df = trans.merge(users, on="client_id", how="left", validate="m:1")
     df = df.merge(cards, on=["card_id", "client_id"], how="left", validate="m:1")
+    
+    
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if df["date"].isna().any():
+        raise ValueError("date has NaT after to_datetime; check trans date format")
 
-    df.drop(columns=["id", "cvv", "card_on_dark_web"], errors="ignore", inplace=True)
+    df.drop(columns=["cvv", "card_on_dark_web"], errors="ignore", inplace=True)
 
     if "year_pin_last_changed" in df.columns:
         df["year_pin_last_changed"] = df["year_pin_last_changed"].astype("Int16")
