@@ -91,7 +91,7 @@ def _tx_1h_count_by_entity(df_sorted: pd.DataFrame, entity_col: str) -> np.ndarr
 def fit_stage1_artifacts_minimal(
     df_train: pd.DataFrame,
     high_amount_q: float = 0.90,
-    high_risk_days=(0, 4, 6),  # 월(0) 금(4) 일(6) 같은 식으로
+    high_risk_days=(0, 4, 6),  # 월(0) 금(4) 일(6) 
 ) -> dict:
     high_amount_thr = float(df_train[AMT_COL].quantile(high_amount_q))
     base_rate = float(df_train[LABEL].mean())
@@ -264,7 +264,7 @@ def build_stage1_dataset_from_min_df(df: pd.DataFrame, artifacts: dict) -> pd.Da
 
 
 def main():
-    in_path = "DATA/dataset/transactions_train"   # <- 너가 실제 저장한 경로로
+    in_path = "DATA/dataset/transactions_train"
     out_parquet = "DATA/dataset/train_stage1_min24cols.parquet"
     artifacts_path = "DATA/artifacts/stage1_artifacts_min.json"
 
