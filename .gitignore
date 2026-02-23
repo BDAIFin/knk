@@ -3,6 +3,14 @@
 # ===============================
 *.csv
 
+
+5DATA/dataset/
+*.parquet
+5DATA/original/
+*.csv
+*.parquet
+
+
 DATA/
 *.csv
 *.parquet
