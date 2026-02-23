@@ -154,6 +154,8 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
         ).clip(lower=0).astype("int8")
     else:
         df["years_since_pin_change"] = pd.Series(0, index=df.index, dtype="int8")
+    
+    df.drop("year_pin_last_changed", inplace=True)
 
     if "retirement_age" in df.columns and "current_age" in df.columns:
         df["years_to_retirement"] = (
@@ -180,6 +182,7 @@ def build_stage2_dataset(cfg: ClientCardSchemaConfig) -> pd.DataFrame:
     df.drop(columns=["home_lat", "home_lon"], inplace=True)
 
     df["abs_amount"] = df["amount"].abs().astype("float32")
+    df.drop("is_online", axis=1, inplace=True)
 
     df["amount_income_ratio"] = (
         df["abs_amount"] / (df["yearly_income"] + 1e-6)

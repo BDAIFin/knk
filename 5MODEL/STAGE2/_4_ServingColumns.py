@@ -539,7 +539,7 @@ def build_features_101(
     df["high_vel_error"] = (df["high_vel_flag"] * df["has_error"]).astype("int8")
     df["high_vel_new_mcc"] = (df["high_vel_flag"] * df["client_mcc_is_new"]).astype("int8")
 
-    # ---- amount context (raw amount이 있으면 우선 사용)
+    # ---- amount context 
     if RAW_AMT_COL in df.columns:
         amt = pd.to_numeric(df[RAW_AMT_COL], errors="coerce").fillna(0).astype("float32").abs()
     else:
@@ -549,7 +549,7 @@ def build_features_101(
     eps = 1e-6
     df = ensure_sorted(df, ["client_id", "date", "_row_id"])
     a_shift = df.groupby("client_id", sort=False)[amt.name if isinstance(amt, pd.Series) else AMT_COL].shift(1) if isinstance(amt, pd.Series) else df.groupby("client_id", sort=False)[AMT_COL].shift(1)
-    # 위 라인은 amt가 series일 때 groupby shift가 불편해서 아래처럼 정리:
+
     df["_amt"] = amt.to_numpy()
     df["_amt_shift"] = df.groupby("client_id", sort=False)["_amt"].shift(1)
     df["_amt_cumsum"] = df["_amt_shift"].fillna(0).groupby(df["client_id"], sort=False).cumsum().astype("float32")
