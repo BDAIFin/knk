@@ -1,40 +1,20 @@
-# ===============================
-# Local data (do NOT commit)
-# ===============================
-*.csv
-
-
-5DATA/dataset/
-*.parquet
-5DATA/original/
-*.csv
-*.parquet
-
-
+# data
+5DATA/
 DATA/
-*.csv
-*.parquet
-*.json
+**/*.csv
+**/*.parquet
+**/*.pkl
+**/*.joblib
+**/*.pt
+**/*.ckpt
+**/*.h5
+**/*.npz
 
-DATA/original/
-*.csv
-*.parquet
-*.json
-# ===============================
-# Jupyter
-# ===============================
+# notebooks checkpoints
 .ipynb_checkpoints/
 
-# ===============================
-# Python
-# ===============================
+artifacts/
+models/*.txt
+
 __pycache__/
 *.pyc
-
-# ===============================
-# OS / Editor
-# ===============================
-.DS_Store
-.vscode/
-original/train_fraud_labels.json
-split/

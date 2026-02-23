@@ -1,0 +1,6 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=5000"]   # 5MB 초과는 커밋 금지 (원하면 10000=10MB)
