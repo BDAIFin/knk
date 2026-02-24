@@ -1,11 +1,3 @@
-# DATA2_train.py
-# build TRAIN_stage2 from full train_stage2 base table
-# - load raw train_stage2 (FULL)
-# - compute required Stage2 features on FULL train_stage2 (history needed)
-# - keep only [id, fraud] + Stage2 cols
-# - merge Stage1 features from ../../DATA/dataset/TRAIN_stage1 by id
-# - save to ../../DATA/dataset/TRAIN_stage2
-
 from pathlib import Path
 import numpy as np
 import pandas as pd
