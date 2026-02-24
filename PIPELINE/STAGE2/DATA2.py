@@ -77,7 +77,6 @@ def build_test_stage2_from_review_ids(
 
     df = df.sort_values(["client_id", "date", IDCOL]).reset_index(drop=True)
 
-    # ---------- helper bases (create if missing) ----------
     if "mcc_risk_level" not in df.columns:
         df["mcc_risk_level"] = np.int8(0)
 
